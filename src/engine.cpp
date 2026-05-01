@@ -1,4 +1,5 @@
 #include "engine.hpp"
+#include "compute.hpp"
 #include <iostream>
 #include <algorithm>
 
@@ -61,8 +62,15 @@ void InferenceEngine::generate(const std::vector<int>& input_ids, int max_tokens
     
     for (int token_id : input_ids) {
         // 1. Embedding lookup (zero-copy into workspace1)
-        float* embed_data = static_cast<float*>(token_embd->get_data());
-        std::copy_n(embed_data + token_id * n_embd, n_embd, ctx->workspace1.begin());
+        if (token_embd->get_type() == DataType::Q4_0) {
+            const block_q4_0* embed_data = static_cast<const block_q4_0*>(token_embd->get_data());
+            // n_embd is the number of elements per row, but blocks are size QK4_0
+            int blocks_per_row = n_embd / QK4_0;
+            dequantize_q4_0(embed_data + token_id * blocks_per_row, ctx->workspace1.data(), n_embd);
+        } else {
+            float* embed_data = static_cast<float*>(token_embd->get_data());
+            std::copy_n(embed_data + token_id * n_embd, n_embd, ctx->workspace1.begin());
+        }
         
         // 2. Transformer layers (streaming mode)
         for (auto& block : blocks) {
