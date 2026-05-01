@@ -30,16 +30,25 @@ void Linear::forward(const Tensor& input, Tensor& output) {
     // x is [in_features]
     // y is [out_features]
     
-    int out_features = weight->get_shape()[0];
-    int in_features = weight->get_shape()[1];
+    int in_features = weight->get_shape()[0];
+    int out_features = weight->get_shape()[1];
     
     const float* x = static_cast<const float*>(input.get_data());
     float* y = static_cast<float*>(output.get_data());
     
     if (weight->get_type() == DataType::Q4_0) {
         gemv_q4_0(out_features, in_features, static_cast<const block_q4_0*>(weight->get_data()), x, y);
+    } else if (weight->get_type() == DataType::F32) {
+        const float* w = static_cast<const float*>(weight->get_data());
+        for (int i = 0; i < out_features; ++i) {
+            float sum = 0.0f;
+            for (int j = 0; j < in_features; ++j) {
+                sum += w[i * in_features + j] * x[j];
+            }
+            y[i] = sum;
+        }
     } else {
-        // TODO: Support other types (F32, F16, etc.)
+        // TODO: Support other types (F16, etc.)
     }
     
     if (bias) {
@@ -97,6 +106,19 @@ void TransformerBlock::forward(InferenceContext& ctx) {
     for (int i = 0; i < ctx.n_embd; ++i) {
         ctx.workspace1[i] += ctx.workspace2[i];
     }
+}
+
+void TransformerBlock::unload_weights() {
+    attn_norm.reset();
+    wq.reset();
+    wk.reset();
+    wv.reset();
+    wo.reset();
+
+    ffn_norm.reset();
+    w1.reset();
+    w2.reset();
+    w3.reset();
 }
 
 } // namespace layer_forge

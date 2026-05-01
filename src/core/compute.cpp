@@ -59,9 +59,11 @@ void gemv_q4_0(int m, int n, const block_q4_0* A, const float* x, float* y) {
 }
 
 void apply_rope(float* data, int n_dims, int n_heads, int head_dim, int pos, float theta) {
+    // In RoPE, n_dims is usually the number of dimensions to rotate per head (often equal to head_dim)
+    // The total dimensions in the tensor per token is n_heads * head_dim
     for (int h = 0; h < n_heads; ++h) {
         for (int i = 0; i < n_dims / 2; ++i) {
-            float freq = 1.0f / std::pow(theta, (2.0f * i) / head_dim);
+            float freq = 1.0f / std::pow(theta, (2.0f * i) / n_dims);
             float val = pos * freq;
             float cos_v = std::cos(val);
             float sin_v = std::sin(val);
