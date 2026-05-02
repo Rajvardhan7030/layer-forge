@@ -6,11 +6,12 @@ SRCS = src/main.cpp \
        src/model/gguf_parser.cpp \
        src/core/compute.cpp \
        src/layers/layers.cpp \
-       src/engine.cpp
+       src/engine.cpp \
+       src/server.cpp
 
 OBJS = $(SRCS:.cpp=.o)
 TARGET = forge_cli
-
+LDFLAGS = -pthread
 all: $(TARGET)
 
 $(TARGET): $(OBJS)

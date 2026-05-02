@@ -47,6 +47,34 @@ You will need a model file in the `.gguf` format (you can find these on sites li
 
 ---
 
+## 🌐 Server Mode (OpenAI Compatible)
+
+Layer Forge now includes a built-in HTTP server that exposes an OpenAI-compatible API. This allows you to use Layer Forge as a backend for tools like FRIDAY, Continue.dev, or any other client that supports the OpenAI API.
+
+### Starting the Server
+```bash
+./forge_cli --server --models-dir ./models --port 8080
+```
+
+### Supported Endpoints
+
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/v1/models` | GET | Lists all `.gguf` models available in the `--models-dir`. |
+| `/v1/chat/completions` | POST | Generates a chat completion. Supports streaming (`stream: true`). |
+
+### Example Request (curl)
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3-8b",
+    "messages": [{"role": "user", "content": "Explain quantum physics in one sentence."}],
+    "stream": true
+  }'
+```
+
+---
 ## 🎨 Key Features at a Glance
 - 🌈 **Colorful CLI**: Easy to read terminal output.
 - 🔋 **Battery Friendly**: Optimized to not waste your CPU's energy.

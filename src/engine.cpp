@@ -20,7 +20,13 @@ bool InferenceEngine::init() {
     n_heads = as_uint64(metadata.at("llama.attention.head_count"));
     
     if (metadata.count("tokenizer.ggml.tokens")) {
-        n_vocab = std::get<std::vector<GGUFValue>>(metadata.at("tokenizer.ggml.tokens").data).size();
+        const auto& tokens_val = metadata.at("tokenizer.ggml.tokens");
+        const auto& tokens_vec = std::get<std::vector<GGUFValue>>(tokens_val.data);
+        n_vocab = tokens_vec.size();
+        vocab.reserve(n_vocab);
+        for (const auto& v : tokens_vec) {
+            vocab.push_back(std::get<std::string>(v.data));
+        }
     } else {
         n_vocab = 32000; // Fallback
     }
@@ -70,46 +76,71 @@ bool InferenceEngine::init() {
     return true;
 }
 
-void InferenceEngine::generate(const std::vector<int>& input_ids, int max_tokens) {
-    std::cout << "Starting generation for " << input_ids.size() << " tokens..." << std::endl;
+void InferenceEngine::generate(const std::vector<int>& input_ids, int max_tokens, TokenCallback callback) {
+    std::cout << "Starting generation for " << input_ids.size() << " prompt tokens..." << std::endl;
     
-    for (int token_id : input_ids) {
-        if (token_id < 0 || token_id >= n_vocab) {
-            throw std::out_of_range("Invalid token ID: " + std::to_string(token_id));
-        }
-
-        // 1. Embedding lookup (zero-copy into workspace1)
+    std::vector<int> tokens = input_ids;
+    
+    // Process prompt (simplified for now, assuming prompt is small and fits in context)
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        int token_id = tokens[i];
+        
+        // 1. Embedding lookup
         if (token_embd->get_type() == DataType::Q4_0) {
             const block_q4_0* embed_data = static_cast<const block_q4_0*>(token_embd->get_data());
-            // n_embd is the number of elements per row, but blocks are size QK4_0
-            if (n_embd % QK4_0 != 0) {
-                throw std::runtime_error("Embedding dimension must be a multiple of " + std::to_string(QK4_0));
-            }
             int blocks_per_row = n_embd / QK4_0;
             dequantize_q4_0(embed_data + token_id * blocks_per_row, ctx->workspace1.data(), n_embd);
         } else if (token_embd->get_type() == DataType::F32) {
             float* embed_data = static_cast<float*>(token_embd->get_data());
             std::copy_n(embed_data + token_id * n_embd, n_embd, ctx->workspace1.begin());
-        } else {
-            throw std::runtime_error("Unsupported embedding tensor type");
         }
-        
-        // 2. Transformer layers (streaming mode)
+
+        // 2. Transformer layers
         for (auto& block : blocks) {
-            // block->load_weights(tensors); // In full streaming, load here
             block->forward(*ctx);
-            // block->unload_weights();     // and unload here
         }
-        
+
+        // Only generate new tokens after the prompt
+        if (i < tokens.size() - 1) continue;
+
         // 3. Final norm and logits
         Tensor h({(uint64_t)n_embd}, DataType::F32, ctx->workspace1.data());
-        Tensor logits({(uint64_t)n_vocab}, DataType::F32, ctx->logits.data());
-        
+        Tensor logits_tensor({(uint64_t)n_vocab}, DataType::F32, ctx->logits.data());
         output_norm->forward(h, h);
-        output_weight->forward(h, logits);
+        output_weight->forward(h, logits_tensor);
+
+        // 4. Greedy sampling
+        int next_token = 0;
+        float max_logit = -1e20f;
+        for (int v = 0; v < n_vocab; ++v) {
+            if (ctx->logits[v] > max_logit) {
+                max_logit = ctx->logits[v];
+                next_token = v;
+            }
+        }
+
+        // Detokenize and callback
+        if (callback) {
+            std::string token_str = " ";
+            if (next_token < (int)vocab.size()) {
+                token_str = vocab[next_token];
+                // Clean up GGUF token prefix (e.g.,   for Llama)
+                if (token_str.find("\u2581") == 0) {
+                    token_str = " " + token_str.substr(3);
+                }
+            }
+            if (!callback(token_str)) break;
+        }
+
+        tokens.push_back(next_token);
         
-        // ... greedy sampling ...
-        std::cout << "Computed logits for token " << token_id << std::endl;
+        // EOS check
+        if (next_token == 2) break; // Common EOS
+        
+        if (tokens.size() - input_ids.size() >= (size_t)max_tokens) break;
+        
+        // Decrement loop counter to keep generating until max_tokens or EOS
+        i = tokens.size() - 2; 
     }
 }
 
