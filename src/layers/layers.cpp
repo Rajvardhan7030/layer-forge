@@ -30,6 +30,9 @@ void Linear::forward(const Tensor& input, Tensor& output) {
     // x is [in_features]
     // y is [out_features]
     
+    if (weight->get_shape().size() < 2) {
+        throw std::runtime_error("Linear layer weight tensor must have at least 2 dimensions");
+    }
     int in_features = weight->get_shape()[0];
     int out_features = weight->get_shape()[1];
     
@@ -61,19 +64,27 @@ void Linear::forward(const Tensor& input, Tensor& output) {
 
 TransformerBlock::TransformerBlock(int layer_id) : id(layer_id) {}
 
+static std::shared_ptr<Tensor> get_tensor(const std::map<std::string, std::shared_ptr<Tensor>>& tensors, const std::string& name) {
+    auto it = tensors.find(name);
+    if (it == tensors.end()) {
+        throw std::runtime_error("Missing tensor: " + name);
+    }
+    return it->second;
+}
+
 void TransformerBlock::load_weights(const std::map<std::string, std::shared_ptr<Tensor>>& model_tensors) {
     std::string prefix = "blk." + std::to_string(id) + ".";
     
-    attn_norm = std::make_shared<RMSNorm>(model_tensors.at(prefix + "attn_norm.weight"));
-    wq = std::make_shared<Linear>(model_tensors.at(prefix + "attn_q.weight"));
-    wk = std::make_shared<Linear>(model_tensors.at(prefix + "attn_k.weight"));
-    wv = std::make_shared<Linear>(model_tensors.at(prefix + "attn_v.weight"));
-    wo = std::make_shared<Linear>(model_tensors.at(prefix + "attn_output.weight"));
+    attn_norm = std::make_shared<RMSNorm>(get_tensor(model_tensors, prefix + "attn_norm.weight"));
+    wq = std::make_shared<Linear>(get_tensor(model_tensors, prefix + "attn_q.weight"));
+    wk = std::make_shared<Linear>(get_tensor(model_tensors, prefix + "attn_k.weight"));
+    wv = std::make_shared<Linear>(get_tensor(model_tensors, prefix + "attn_v.weight"));
+    wo = std::make_shared<Linear>(get_tensor(model_tensors, prefix + "attn_output.weight"));
     
-    ffn_norm = std::make_shared<RMSNorm>(model_tensors.at(prefix + "ffn_norm.weight"));
-    w1 = std::make_shared<Linear>(model_tensors.at(prefix + "ffn_gate.weight")); // MLP Gate
-    w2 = std::make_shared<Linear>(model_tensors.at(prefix + "ffn_down.weight")); // MLP Down
-    w3 = std::make_shared<Linear>(model_tensors.at(prefix + "ffn_up.weight"));   // MLP Up
+    ffn_norm = std::make_shared<RMSNorm>(get_tensor(model_tensors, prefix + "ffn_norm.weight"));
+    w1 = std::make_shared<Linear>(get_tensor(model_tensors, prefix + "ffn_gate.weight")); // MLP Gate
+    w2 = std::make_shared<Linear>(get_tensor(model_tensors, prefix + "ffn_down.weight")); // MLP Down
+    w3 = std::make_shared<Linear>(get_tensor(model_tensors, prefix + "ffn_up.weight"));   // MLP Up
 }
 
 void TransformerBlock::forward(InferenceContext& ctx) {

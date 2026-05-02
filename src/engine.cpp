@@ -15,9 +15,9 @@ bool InferenceEngine::init() {
     
     // Extract hyperparams
     const auto& metadata = parser->get_metadata();
-    n_layers = std::get<uint32_t>(metadata.at("llama.block_count").data);
-    n_embd = std::get<uint32_t>(metadata.at("llama.embedding_length").data);
-    n_heads = std::get<uint32_t>(metadata.at("llama.attention.head_count").data);
+    n_layers = as_uint64(metadata.at("llama.block_count"));
+    n_embd = as_uint64(metadata.at("llama.embedding_length"));
+    n_heads = as_uint64(metadata.at("llama.attention.head_count"));
     
     if (metadata.count("tokenizer.ggml.tokens")) {
         n_vocab = std::get<std::vector<GGUFValue>>(metadata.at("tokenizer.ggml.tokens").data).size();
@@ -31,10 +31,15 @@ bool InferenceEngine::init() {
         if (info.type == 2) type = DataType::Q4_0; // GGML_TYPE_Q4_0
         // ... map other GGML types to our DataType ...
 
+        void* ptr = mmap_file->get_ptr(info.offset);
+        if (!ptr && info.offset > 0) { // offset 0 might be valid for empty file but here we expect data
+            throw std::runtime_error("Invalid offset for tensor: " + info.name);
+        }
+
         tensors[info.name] = std::make_shared<Tensor>(
             info.dims, 
             type, 
-            mmap_file->get_ptr(info.offset)
+            ptr
         );
     }
 
@@ -47,9 +52,17 @@ bool InferenceEngine::init() {
         blocks.push_back(std::move(block));
     }
 
-    token_embd = tensors.at("token_embd.weight");
-    output_norm = std::make_shared<RMSNorm>(tensors.at("output_norm.weight"));
-    output_weight = std::make_shared<Linear>(tensors.at("output.weight"));
+    static auto get_tensor = [](const std::map<std::string, std::shared_ptr<Tensor>>& tensors, const std::string& name) {
+        auto it = tensors.find(name);
+        if (it == tensors.end()) {
+            throw std::runtime_error("Missing tensor: " + name);
+        }
+        return it->second;
+    };
+
+    token_embd = get_tensor(tensors, "token_embd.weight");
+    output_norm = std::make_shared<RMSNorm>(get_tensor(tensors, "output_norm.weight"));
+    output_weight = std::make_shared<Linear>(get_tensor(tensors, "output.weight"));
 
     // Initialize Inference Context
     ctx = std::make_unique<InferenceContext>(n_embd, n_layers, n_vocab);
@@ -61,15 +74,24 @@ void InferenceEngine::generate(const std::vector<int>& input_ids, int max_tokens
     std::cout << "Starting generation for " << input_ids.size() << " tokens..." << std::endl;
     
     for (int token_id : input_ids) {
+        if (token_id < 0 || token_id >= n_vocab) {
+            throw std::out_of_range("Invalid token ID: " + std::to_string(token_id));
+        }
+
         // 1. Embedding lookup (zero-copy into workspace1)
         if (token_embd->get_type() == DataType::Q4_0) {
             const block_q4_0* embed_data = static_cast<const block_q4_0*>(token_embd->get_data());
             // n_embd is the number of elements per row, but blocks are size QK4_0
+            if (n_embd % QK4_0 != 0) {
+                throw std::runtime_error("Embedding dimension must be a multiple of " + std::to_string(QK4_0));
+            }
             int blocks_per_row = n_embd / QK4_0;
             dequantize_q4_0(embed_data + token_id * blocks_per_row, ctx->workspace1.data(), n_embd);
-        } else {
+        } else if (token_embd->get_type() == DataType::F32) {
             float* embed_data = static_cast<float*>(token_embd->get_data());
             std::copy_n(embed_data + token_id * n_embd, n_embd, ctx->workspace1.begin());
+        } else {
+            throw std::runtime_error("Unsupported embedding tensor type");
         }
         
         // 2. Transformer layers (streaming mode)

@@ -6,6 +6,7 @@
 #include <variant>
 #include <cstdint>
 #include <fstream>
+#include <stdexcept>
 
 namespace layer_forge {
 
@@ -21,6 +22,20 @@ struct GGUFValue {
                  float, bool, std::string, uint64_t, int64_t, double, 
                  std::vector<GGUFValue>> data;
 };
+
+inline uint64_t as_uint64(const GGUFValue& val) {
+    switch (val.type) {
+        case GGUFType::UINT8:  return std::get<uint8_t>(val.data);
+        case GGUFType::INT8:   return (uint64_t)std::get<int8_t>(val.data);
+        case GGUFType::UINT16: return std::get<uint16_t>(val.data);
+        case GGUFType::INT16:  return (uint64_t)std::get<int16_t>(val.data);
+        case GGUFType::UINT32: return std::get<uint32_t>(val.data);
+        case GGUFType::INT32:  return (uint64_t)std::get<int32_t>(val.data);
+        case GGUFType::UINT64: return std::get<uint64_t>(val.data);
+        case GGUFType::INT64:  return (uint64_t)std::get<int64_t>(val.data);
+        default: throw std::runtime_error("GGUFValue is not an integer type");
+    }
+}
 
 struct GGUFTensorInfo {
     std::string name;
@@ -54,7 +69,7 @@ private:
 
     // Helper functions for reading GGUF types
     std::string read_string();
-    GGUFValue read_value(GGUFType type);
+    GGUFValue read_value(GGUFType type, int depth = 0);
 };
 
 } // namespace layer_forge

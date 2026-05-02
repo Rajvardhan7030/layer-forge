@@ -1,6 +1,7 @@
 #include "gguf_parser.hpp"
 #include <iostream>
 #include <cstring>
+#include <stdexcept>
 
 namespace layer_forge {
 
@@ -50,6 +51,9 @@ bool GGUFParser::parse() {
         GGUFTensorInfo info;
         info.name = read_string();
         file.read(reinterpret_cast<char*>(&info.n_dims), sizeof(info.n_dims));
+        if (info.n_dims > 10) {
+            throw std::runtime_error("Too many dimensions for tensor " + info.name + ": " + std::to_string(info.n_dims));
+        }
         info.dims.resize(info.n_dims);
         file.read(reinterpret_cast<char*>(info.dims.data()), info.n_dims * sizeof(uint64_t));
         file.read(reinterpret_cast<char*>(&info.type), sizeof(info.type));
@@ -76,13 +80,25 @@ bool GGUFParser::parse() {
 
 std::string GGUFParser::read_string() {
     uint64_t len;
-    file.read(reinterpret_cast<char*>(&len), sizeof(len));
+    if (!file.read(reinterpret_cast<char*>(&len), sizeof(len))) {
+        throw std::runtime_error("Failed to read string length");
+    }
+    if (len > 1024 * 1024) { // 1MB limit
+        throw std::runtime_error("String too long: " + std::to_string(len));
+    }
     std::string str(len, '\0');
-    file.read(&str[0], len);
+    if (len > 0) {
+        if (!file.read(&str[0], len)) {
+            throw std::runtime_error("Failed to read string content");
+        }
+    }
     return str;
 }
 
-GGUFValue GGUFParser::read_value(GGUFType type) {
+GGUFValue GGUFParser::read_value(GGUFType type, int depth) {
+    if (depth > 16) {
+        throw std::runtime_error("GGUF value recursion depth exceeded");
+    }
     GGUFValue val;
     val.type = type;
     switch (type) {
@@ -100,13 +116,20 @@ GGUFValue GGUFParser::read_value(GGUFType type) {
         case GGUFType::FLOAT64: { double v; file.read(reinterpret_cast<char*>(&v), 8); val.data = v; break; }
         case GGUFType::ARRAY: {
             uint32_t sub_type_val;
-            file.read(reinterpret_cast<char*>(&sub_type_val), sizeof(sub_type_val));
+            if (!file.read(reinterpret_cast<char*>(&sub_type_val), sizeof(sub_type_val))) {
+                throw std::runtime_error("Failed to read array sub-type");
+            }
             uint64_t len;
-            file.read(reinterpret_cast<char*>(&len), sizeof(len));
+            if (!file.read(reinterpret_cast<char*>(&len), sizeof(len))) {
+                throw std::runtime_error("Failed to read array length");
+            }
+            if (len > 1000000) { // Limit array size to 1M elements
+                 throw std::runtime_error("GGUF array too large");
+            }
             std::vector<GGUFValue> vec;
             vec.reserve(len);
             for (uint64_t i = 0; i < len; ++i) {
-                vec.push_back(read_value(static_cast<GGUFType>(sub_type_val)));
+                vec.push_back(read_value(static_cast<GGUFType>(sub_type_val), depth + 1));
             }
             val.data = vec;
             break;
